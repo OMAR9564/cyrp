@@ -9,16 +9,16 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import logging
-import psutil  # For checking file usage (requires `pip install psutil`)
+import psutil  # Requires `pip install psutil`
 
 # -----------------------
 # CONFIG
 # -----------------------
-ENCRYPTED_EXTENSION = ".encrypted"
+ENCRYPTED_EXTENSION = ".bya"
 DEFAULT_TIMEOUT = 100
 ITERATIONS = 390000
 LOG_FILE = "crypto_manager.log"
-CHECK_INTERVAL = 5  # Seconds to wait between file usage checks
+CHECK_INTERVAL = 5
 
 # Setup logging
 logging.basicConfig(
@@ -73,7 +73,7 @@ class CryptoManager:
 
     def encrypt_file(self, filepath: str) -> bool:
         try:
-            logger.info(f"Encrypting: {filepath}")
+            logger.info(f"Attempting to encrypt: {filepath}")
             with open(filepath, 'rb') as f:
                 data = f.read()
 
@@ -105,7 +105,7 @@ class CryptoManager:
                 logger.warning(f"Not an encrypted file: {filepath}")
                 return False
 
-            logger.info(f"Decrypting: {filepath}")
+            logger.info(f"Attempting to decrypt: {filepath}")
             with open(filepath, 'rb') as f:
                 file_data = f.read()
 
@@ -136,7 +136,6 @@ class CryptoManager:
 # Helper Functions
 # -----------------------
 def is_file_in_use(filepath: str) -> bool:
-    """Check if a file is currently in use by any process."""
     for proc in psutil.process_iter(['pid', 'open_files']):
         try:
             for file in proc.info['open_files'] or []:
@@ -171,37 +170,25 @@ def get_target_paths() -> List[str]:
             print(f"[ERROR] Path not found: {path}")
             continue
         paths.append(path)
+    logger.info(f"Collected paths: {paths}")
     return paths
 
-def collect_decrypted_files(target_paths: List[str]) -> List[str]:
-    """Collect all decrypted files that need to be re-encrypted."""
-    decrypted_files = []
+def collect_files(target_paths: List[str], action: str) -> List[str]:
+    files = []
     for path in target_paths:
-        if os.path.isfile(path) and not path.endswith(ENCRYPTED_EXTENSION):
-            decrypted_files.append(path)
+        if os.path.isfile(path):
+            if (action == 'decrypt' and path.endswith(ENCRYPTED_EXTENSION)) or \
+               (action == 'encrypt' and not path.endswith(ENCRYPTED_EXTENSION)):
+                files.append(path)
         elif os.path.isdir(path):
-            for root, _, files in os.walk(path):
-                for name in files:
+            for root, _, filenames in os.walk(path):
+                for name in filenames:
                     file_path = os.path.join(root, name)
-                    if not file_path.endswith(ENCRYPTED_EXTENSION):
-                        decrypted_files.append(file_path)
-    return decrypted_files
-
-def get_verified_password() -> Optional[bytes]:
-    """Prompt for password twice and verify they match."""
-    for attempt in range(3):  # Allow 3 attempts
-        password1 = getpass.getpass("Enter encryption password (remember it!): ").encode()
-        password2 = getpass.getpass("Confirm password: ").encode()
-        
-        if password1 == password2:
-            return password1
-        else:
-            print(f"[ERROR] Passwords do not match! Attempt {attempt + 1}/3")
-            logger.error(f"Password mismatch on attempt {attempt + 1}")
-    
-    print("[ERROR] Too many failed attempts. Exiting.")
-    logger.error("Too many password mismatch attempts. Aborting.")
-    return None
+                    if (action == 'decrypt' and file_path.endswith(ENCRYPTED_EXTENSION)) or \
+                       (action == 'encrypt' and not file_path.endswith(ENCRYPTED_EXTENSION)):
+                        files.append(file_path)
+    logger.info(f"Collected {action} files: {files}")
+    return files
 
 # -----------------------
 # Main Application Logic
@@ -216,27 +203,35 @@ def secure_access(password: bytes):
         return
 
     try:
+        # Initial encryption phase (if files are unencrypted)
+        logger.info("Starting initial encryption process for unencrypted files")
+        print("\n[+] Encrypting unencrypted files...")
+        initial_encrypt_files = collect_files(target_paths, 'encrypt')
+        total_initial_encrypted = 0
+        for filepath in initial_encrypt_files:
+            if crypto.encrypt_file(filepath):
+                total_initial_encrypted += 1
+
+        if total_initial_encrypted > 0:
+            print(f"[+] Initially encrypted {total_initial_encrypted} files")
+            logger.info(f"Initially encrypted {total_initial_encrypted} files")
+        else:
+            print("[INFO] No unencrypted files found to encrypt initially")
+            logger.info("No unencrypted files found to encrypt initially")
+
         # Decryption phase
         logger.info("Starting decryption process")
         print("\n[+] Decrypting files...")
+        decrypt_files = collect_files(target_paths, 'decrypt')
         total_decrypted = 0
-        for path in target_paths:
-            if os.path.isfile(path):
-                total_decrypted += 1 if crypto.decrypt_file(path) else 0
-            elif os.path.isdir(path):
-                total_decrypted += process_folder(path, crypto, 'decrypt')
+        for filepath in decrypt_files:
+            total_decrypted += 1 if crypto.decrypt_file(filepath) else 0
 
         print(f"[+] Decrypted {total_decrypted} files")
         logger.info(f"Decrypted {total_decrypted} files")
         if total_decrypted == 0:
-            print("[WARNING] No files were decrypted!")
-            logger.warning("No files were decrypted")
-            return
-
-        # Collect decrypted files for re-encryption
-        decrypted_files = collect_decrypted_files(target_paths)
-        if not decrypted_files:
-            print("[WARNING] No decrypted files found to re-encrypt!")
+            print("[WARNING] No encrypted files found to decrypt!")
+            logger.warning("No encrypted files found to decrypt")
             return
 
         # Timeout phase
@@ -246,35 +241,44 @@ def secure_access(password: bytes):
         logger.info(f"Waiting {timeout} seconds before re-encryption")
         time.sleep(timeout)
 
-        # Re-encryption phase with file usage check
+        # Re-encryption phase
         logger.info("Starting re-encryption process")
-        print("\n[+] Time's up. Checking file usage before encrypting...")
-        files_to_encrypt = decrypted_files[:]
-        while files_to_encrypt:
+        print("\n[+] Time's up. Checking files for re-encryption...")
+        encrypt_files = collect_files(target_paths, 'encrypt')
+        if not encrypt_files:
+            print("[WARNING] No files found to re-encrypt!")
+            logger.warning("No files found to re-encrypt")
+            return
+
+        total_encrypted = 0
+        while encrypt_files:
             still_in_use = []
-            for filepath in files_to_encrypt:
-                if os.path.exists(filepath) and is_file_in_use(filepath):
+            for filepath in encrypt_files:
+                if not os.path.exists(filepath):
+                    logger.warning(f"File no longer exists: {filepath}")
+                    continue
+                if is_file_in_use(filepath):
                     logger.warning(f"File in use: {filepath}")
                     print(f"[WARNING] File still in use: {filepath}")
                     still_in_use.append(filepath)
-                elif os.path.exists(filepath):
+                else:
                     if crypto.encrypt_file(filepath):
-                        logger.info(f"Re-encrypted: {filepath}")
+                        total_encrypted += 1
                         print(f"[+] Re-encrypted: {filepath}")
                     else:
                         logger.error(f"Failed to re-encrypt: {filepath}")
                         print(f"[ERROR] Failed to re-encrypt: {filepath}")
 
             if still_in_use:
-                files_to_encrypt = still_in_use
-                print(f"[INFO] Waiting {CHECK_INTERVAL} seconds for files to be released...")
+                encrypt_files = still_in_use
+                print(f"[INFO] Waiting {CHECK_INTERVAL} seconds for {len(still_in_use)} files to be released...")
                 logger.info(f"Waiting {CHECK_INTERVAL} seconds for {len(still_in_use)} files in use")
                 time.sleep(CHECK_INTERVAL)
             else:
                 break
 
-        print(f"[+] Re-encryption completed. All files are now secure.")
-        logger.info("Re-encryption completed successfully")
+        print(f"[+] Re-encrypted {total_encrypted} files. All files are now secure.")
+        logger.info(f"Re-encrypted {total_encrypted} files")
 
     except KeyboardInterrupt:
         logger.warning("Process interrupted by user")
@@ -283,20 +287,35 @@ def secure_access(password: bytes):
         logger.error(f"Unexpected error: {e}")
         print(f"[ERROR] An unexpected error occurred: {e}")
 
+def get_verified_password() -> Optional[bytes]:
+    for attempt in range(3):
+        password1 = getpass.getpass("Enter encryption password (remember it!): ").encode()
+        password2 = getpass.getpass("Confirm password: ").encode()
+        
+        if password1 == password2:
+            return password1
+        else:
+            print(f"[ERROR] Passwords do not match! Attempt {attempt + 1}/3")
+            logger.error(f"Password mismatch on attempt {attempt + 1}")
+    
+    print("[ERROR] Too many failed attempts. Exiting.")
+    logger.error("Too many password mismatch attempts. Aborting.")
+    return None
+
 # -----------------------
 # Entry Point
 # -----------------------
 if __name__ == "__main__":
     display_intro()
     try:
-        import psutil  # Ensure psutil is installed
+        import psutil
     except ImportError:
         print("[ERROR] 'psutil' module is required. Install it with 'pip install psutil'")
         sys.exit(1)
     
     password = get_verified_password()
     if password is None:
-        sys.exit(1)  # Exit if password verification fails
+        sys.exit(1)
     
     secure_access(password)
     print("\n[+] Process completed. Check crypto_manager.log for details.")
