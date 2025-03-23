@@ -17,12 +17,14 @@ from tqdm import tqdm  # Requires `pip install tqdm`
 # -----------------------
 # CONFIG
 # -----------------------
-ENCRYPTED_EXTENSION = ".bya"
+ENCRYPTED_EXTENSION = ".bya" 
 DEFAULT_TIMEOUT = 100
 ITERATIONS = 390000
 LOG_FILE = "crypto_manager.log"
 CHECK_INTERVAL = 5
-CHUNK_SIZE = 64 * 1024  # 64KB chunks
+CHUNK_SIZE = 64 * 1024
+RETRY_DELAY = 1
+MAX_RETRIES = 5
 
 # Setup logging
 logging.basicConfig(
@@ -76,6 +78,20 @@ class CryptoManager:
         )
         return kdf.derive(self.password)
 
+    def _retry_replace(self, src: str, dst: str) -> bool:
+        for attempt in range(MAX_RETRIES):
+            try:
+                os.replace(src, dst)
+                return True
+            except PermissionError as e:
+                logger.warning(f"Retry {attempt + 1}/{MAX_RETRIES} - File locked: {e}")
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(RETRY_DELAY)
+                else:
+                    logger.error(f"Failed to replace {src} -> {dst} after {MAX_RETRIES} attempts")
+                    return False
+        return False
+
     def encrypt_file(self, filepath: str) -> bool:
         try:
             logger.info(f"Encrypting: {filepath}")
@@ -88,6 +104,7 @@ class CryptoManager:
             padder = padding.PKCS7(128).padder()
 
             encrypted_filepath = filepath + ENCRYPTED_EXTENSION
+            temp_path = None
             with tqdm(total=file_size, desc=f"Encrypting {os.path.basename(filepath)}", unit="B", unit_scale=True) as pbar:
                 if self.use_ssd:
                     with tempfile.NamedTemporaryFile(delete=False) as temp_file:
@@ -101,7 +118,8 @@ class CryptoManager:
                                 pbar.update(len(chunk))
                             final_padded = padder.finalize()
                             f_out.write(encryptor.update(final_padded) + encryptor.finalize())
-                        os.replace(temp_path, encrypted_filepath)
+                    if not self._retry_replace(temp_path, encrypted_filepath):
+                        raise OSError(f"Could not replace {temp_path} with {encrypted_filepath}")
                 else:
                     with open(filepath, 'rb') as f_in, open(encrypted_filepath, 'wb') as f_out:
                         f_out.write(salt + iv)
@@ -118,16 +136,22 @@ class CryptoManager:
             return True
         except Exception as e:
             logger.error(f"Encryption failed for {filepath}: {e}")
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                    logger.info(f"Cleaned up temporary file: {temp_path}")
+                except OSError:
+                    logger.error(f"Failed to clean up temporary file: {temp_path}")
             return False
 
-    def decrypt_file(self, filepath: str) -> bool:
+    def decrypt_file(self, filepath: str) -> Optional[str]:
         try:
             if not filepath.endswith(ENCRYPTED_EXTENSION):
                 logger.warning(f"Not an encrypted file: {filepath}")
-                return False
+                return None
 
             logger.info(f"Decrypting: {filepath}")
-            file_size = os.path.getsize(filepath) - 32  # Subtract salt (16) and IV (16)
+            file_size = os.path.getsize(filepath) - 32
             with open(filepath, 'rb') as f_in:
                 salt = f_in.read(16)
                 iv = f_in.read(16)
@@ -138,6 +162,7 @@ class CryptoManager:
             unpadder = padding.PKCS7(128).unpadder()
 
             original_filepath = filepath[:-len(ENCRYPTED_EXTENSION)]
+            temp_path = None
             with tqdm(total=file_size, desc=f"Decrypting {os.path.basename(filepath)}", unit="B", unit_scale=True) as pbar:
                 if self.use_ssd:
                     with tempfile.NamedTemporaryFile(delete=False) as temp_file:
@@ -151,7 +176,8 @@ class CryptoManager:
                                 pbar.update(len(chunk))
                             final_decrypted = decryptor.finalize()
                             f_out.write(unpadder.update(final_decrypted) + unpadder.finalize())
-                        os.replace(temp_path, original_filepath)
+                    if not self._retry_replace(temp_path, original_filepath):
+                        raise OSError(f"Could not replace {temp_path} with {original_filepath}")
                 else:
                     with open(filepath, 'rb') as f_in, open(original_filepath, 'wb') as f_out:
                         f_in.seek(32)
@@ -165,10 +191,16 @@ class CryptoManager:
 
             os.remove(filepath)
             logger.info(f"Successfully decrypted: {filepath} -> {original_filepath}")
-            return True
+            return original_filepath  # Return the decrypted file path
         except Exception as e:
             logger.error(f"Decryption failed for {filepath}: {e}")
-            return False
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                    logger.info(f"Cleaned up temporary file: {temp_path}")
+                except OSError:
+                    logger.error(f"Failed to clean up temporary file: {temp_path}")
+            return None
 
 # -----------------------
 # Helper Functions
@@ -183,18 +215,25 @@ def is_file_in_use(filepath: str) -> bool:
             continue
     return False
 
-def process_file(args: tuple) -> bool:
+def process_file(args: tuple) -> tuple[bool, Optional[str]]:
     filepath, password, action, use_ssd = args
     crypto = CryptoManager(password, use_ssd)
-    return crypto.encrypt_file(filepath) if action == 'encrypt' else crypto.decrypt_file(filepath)
+    if action == 'encrypt':
+        success = crypto.encrypt_file(filepath)
+        return success, None
+    else:  # decrypt
+        decrypted_path = crypto.decrypt_file(filepath)
+        return decrypted_path is not None, decrypted_path
 
-def process_files_parallel(files: List[str], password: bytes, action: str, use_full_cpu: bool, use_ssd: bool) -> int:
+def process_files_parallel(files: List[str], password: bytes, action: str, use_full_cpu: bool, use_ssd: bool) -> tuple[int, List[str]]:
     if not files:
-        return 0
+        return 0, []
     processes = mp.cpu_count() if use_full_cpu else 1
     with mp.Pool(processes=processes) as pool:
         results = pool.map(process_file, [(f, password, action, use_ssd) for f in files])
-    return sum(results)
+    success_count = sum(1 for success, _ in results if success)
+    decrypted_files = [path for success, path in results if success and path is not None]
+    return success_count, decrypted_files
 
 def get_target_paths() -> List[str]:
     paths = []
@@ -244,7 +283,7 @@ def secure_access(password: bytes, use_full_cpu: bool, use_ssd: bool):
         logger.info("Starting initial encryption process")
         print("\n[+] Encrypting unencrypted files...")
         initial_encrypt_files = collect_files(target_paths, 'encrypt')
-        total_initial_encrypted = process_files_parallel(initial_encrypt_files, password, 'encrypt', use_full_cpu, use_ssd)
+        total_initial_encrypted, _ = process_files_parallel(initial_encrypt_files, password, 'encrypt', use_full_cpu, use_ssd)
         if total_initial_encrypted > 0:
             print(f"[+] Initially encrypted {total_initial_encrypted} files")
             logger.info(f"Initially encrypted {total_initial_encrypted} files")
@@ -256,7 +295,7 @@ def secure_access(password: bytes, use_full_cpu: bool, use_ssd: bool):
         logger.info("Starting decryption process")
         print("\n[+] Decrypting files...")
         decrypt_files = collect_files(target_paths, 'decrypt')
-        total_decrypted = process_files_parallel(decrypt_files, password, 'decrypt', use_full_cpu, use_ssd)
+        total_decrypted, decrypted_file_paths = process_files_parallel(decrypt_files, password, 'decrypt', use_full_cpu, use_ssd)
         print(f"[+] Decrypted {total_decrypted} files")
         logger.info(f"Decrypted {total_decrypted} files")
         if total_decrypted == 0:
@@ -274,7 +313,7 @@ def secure_access(password: bytes, use_full_cpu: bool, use_ssd: bool):
         # Re-encryption phase
         logger.info("Starting re-encryption process")
         print("\n[+] Time's up. Checking files for re-encryption...")
-        encrypt_files = collect_files(target_paths, 'encrypt')
+        encrypt_files = [f for f in decrypted_file_paths if os.path.exists(f)]  # Use decrypted files
         if not encrypt_files:
             print("[WARNING] No files found to re-encrypt!")
             logger.warning("No files found to re-encrypt")
@@ -296,7 +335,7 @@ def secure_access(password: bytes, use_full_cpu: bool, use_ssd: bool):
                     encrypt_batch.append(filepath)
 
             if encrypt_batch:
-                encrypted_count = process_files_parallel(encrypt_batch, password, 'encrypt', use_full_cpu, use_ssd)
+                encrypted_count, _ = process_files_parallel(encrypt_batch, password, 'encrypt', use_full_cpu, use_ssd)
                 total_encrypted += encrypted_count
                 print(f"[+] Re-encrypted {encrypted_count} files in this batch")
 
@@ -335,7 +374,7 @@ def get_verified_password() -> Optional[bytes]:
 
 def get_usage_preference(prompt: str) -> bool:
     response = input(prompt).strip().lower()
-    return response == 'full'  # Default to False (normal) if empty or invalid
+    return response == 'full'
 
 # -----------------------
 # Entry Point
@@ -349,7 +388,6 @@ if __name__ == "__main__":
         print(f"[ERROR] Missing required module: {e}. Install with 'pip install {e.name}'")
         sys.exit(1)
 
-    # Get CPU and RAM usage preferences
     use_full_cpu = get_usage_preference(
         "Use full CPU power? (full/normal, press Enter for normal): "
     )
