@@ -187,6 +187,22 @@ def collect_decrypted_files(target_paths: List[str]) -> List[str]:
                         decrypted_files.append(file_path)
     return decrypted_files
 
+def get_verified_password() -> Optional[bytes]:
+    """Prompt for password twice and verify they match."""
+    for attempt in range(3):  # Allow 3 attempts
+        password1 = getpass.getpass("Enter encryption password (remember it!): ").encode()
+        password2 = getpass.getpass("Confirm password: ").encode()
+        
+        if password1 == password2:
+            return password1
+        else:
+            print(f"[ERROR] Passwords do not match! Attempt {attempt + 1}/3")
+            logger.error(f"Password mismatch on attempt {attempt + 1}")
+    
+    print("[ERROR] Too many failed attempts. Exiting.")
+    logger.error("Too many password mismatch attempts. Aborting.")
+    return None
+
 # -----------------------
 # Main Application Logic
 # -----------------------
@@ -277,6 +293,10 @@ if __name__ == "__main__":
     except ImportError:
         print("[ERROR] 'psutil' module is required. Install it with 'pip install psutil'")
         sys.exit(1)
-    password = getpass.getpass("Enter encryption password (remember it!): ").encode()
+    
+    password = get_verified_password()
+    if password is None:
+        sys.exit(1)  # Exit if password verification fails
+    
     secure_access(password)
     print("\n[+] Process completed. Check crypto_manager.log for details.")
