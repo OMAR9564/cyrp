@@ -1,0 +1,49 @@
+2025-03-23 22:47:41,739 - INFO - Collecting target paths from user input
+2025-03-23 22:49:21,063 - INFO - Collecting target paths from user input
+2025-03-23 22:49:27,686 - INFO - Starting decryption process
+2025-03-23 22:49:27,688 - INFO - Decrypting: C:\Users\OMAR\Desktop\temp\New Text Document.txt.encrypted
+2025-03-23 22:49:27,831 - INFO - Successfully decrypted: C:\Users\OMAR\Desktop\temp\New Text Document.txt.encrypted -> C:\Users\OMAR\Desktop\temp\New Text Document.txt
+2025-03-23 22:49:27,831 - INFO - Decrypted 1 files
+2025-03-23 22:49:36,081 - INFO - Waiting 10 seconds before re-encryption
+2025-03-23 22:49:46,083 - INFO - Starting re-encryption process
+2025-03-23 22:49:46,084 - INFO - Encrypting: C:\Users\OMAR\Desktop\temp\New Text Document.txt
+2025-03-23 22:49:46,212 - INFO - Successfully encrypted: C:\Users\OMAR\Desktop\temp\New Text Document.txt -> C:\Users\OMAR\Desktop\temp\New Text Document.txt.encrypted
+2025-03-23 22:49:46,213 - INFO - Encrypted 1 files
+2025-03-23 22:52:07,523 - INFO - Collecting target paths from user input
+2025-03-23 22:52:11,202 - INFO - Starting decryption process
+2025-03-23 22:52:11,202 - INFO - Decrypted 0 files
+2025-03-23 22:52:11,204 - WARNING - No files were decrypted
+2025-03-23 22:52:29,896 - INFO - Collecting target paths from user input
+2025-03-23 22:52:33,950 - INFO - Starting decryption process
+2025-03-23 22:52:33,952 - INFO - Decrypting: C:\Users\OMAR\Desktop\temp\New Text Document.txt.encrypted
+2025-03-23 22:52:34,072 - INFO - Successfully decrypted: C:\Users\OMAR\Desktop\temp\New Text Document.txt.encrypted -> C:\Users\OMAR\Desktop\temp\New Text Document.txt
+2025-03-23 22:52:34,073 - INFO - Decrypted 1 files
+2025-03-23 22:52:36,193 - INFO - Waiting 10 seconds before re-encryption
+2025-03-23 22:52:46,192 - INFO - Starting re-encryption process
+2025-03-23 22:52:54,270 - INFO - Encrypting: C:\Users\OMAR\Desktop\temp\New Text Document.txt
+2025-03-23 22:52:54,392 - INFO - Successfully encrypted: C:\Users\OMAR\Desktop\temp\New Text Document.txt -> C:\Users\OMAR\Desktop\temp\New Text Document.txt.encrypted
+2025-03-23 22:52:54,392 - INFO - Re-encrypted: C:\Users\OMAR\Desktop\temp\New Text Document.txt
+2025-03-23 22:52:54,394 - INFO - Re-encryption completed successfully
+2025-03-23 22:53:37,027 - INFO - Collecting target paths from user input
+2025-03-23 22:53:48,849 - INFO - Starting decryption process
+2025-03-23 22:53:48,850 - INFO - Decrypting: C:\Users\OMAR\Desktop\temp\New Text Document.txt.encrypted
+2025-03-23 22:53:48,970 - ERROR - Decryption failed for C:\Users\OMAR\Desktop\temp\New Text Document.txt.encrypted: Invalid padding bytes.
+2025-03-23 22:53:48,970 - INFO - Decrypted 0 files
+2025-03-23 22:53:48,971 - WARNING - No files were decrypted
+2025-03-23 22:53:56,833 - INFO - Collecting target paths from user input
+2025-03-23 22:54:00,318 - INFO - Starting decryption process
+2025-03-23 22:54:00,319 - INFO - Decrypting: C:\Users\OMAR\Desktop\temp\New Text Document.txt.encrypted
+2025-03-23 22:54:00,443 - ERROR - Decryption failed for C:\Users\OMAR\Desktop\temp\New Text Document.txt.encrypted: Invalid padding bytes.
+2025-03-23 22:54:00,443 - INFO - Decrypted 0 files
+2025-03-23 22:54:00,443 - WARNING - No files were decrypted
+2025-03-23 22:54:20,784 - INFO - Collecting target paths from user input
+2025-03-23 22:54:25,831 - INFO - Starting decryption process
+2025-03-23 22:54:25,831 - INFO - Decrypting: C:\Users\OMAR\Desktop\temp\New Text Document.txt.encrypted
+2025-03-23 22:54:25,968 - INFO - Successfully decrypted: C:\Users\OMAR\Desktop\temp\New Text Document.txt.encrypted -> C:\Users\OMAR\Desktop\temp\New Text Document.txt
+2025-03-23 22:54:25,972 - INFO - Decrypted 1 files
+2025-03-23 22:54:28,130 - INFO - Waiting 10 seconds before re-encryption
+2025-03-23 22:54:38,130 - INFO - Starting re-encryption process
+2025-03-23 22:54:46,675 - INFO - Encrypting: C:\Users\OMAR\Desktop\temp\New Text Document.txt
+2025-03-23 22:54:46,805 - INFO - Successfully encrypted: C:\Users\OMAR\Desktop\temp\New Text Document.txt -> C:\Users\OMAR\Desktop\temp\New Text Document.txt.encrypted
+2025-03-23 22:54:46,805 - INFO - Re-encrypted: C:\Users\OMAR\Desktop\temp\New Text Document.txt
+2025-03-23 22:54:46,805 - INFO - Re-encryption completed successfully

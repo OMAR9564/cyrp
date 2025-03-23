@@ -3,12 +3,13 @@ import sys
 import time
 import getpass
 import platform
-from typing import Optional
+from typing import List, Optional
 from cryptography.hazmat.primitives import padding, hashes
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from base64 import urlsafe_b64encode, urlsafe_b64decode
+import logging
+import psutil  # For checking file usage (requires `pip install psutil`)
 
 # -----------------------
 # CONFIG
@@ -16,7 +17,45 @@ from base64 import urlsafe_b64encode, urlsafe_b64decode
 ENCRYPTED_EXTENSION = ".encrypted"
 DEFAULT_TIMEOUT = 100
 ITERATIONS = 390000
+LOG_FILE = "crypto_manager.log"
+CHECK_INTERVAL = 5  # Seconds to wait between file usage checks
 
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(LOG_FILE),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# -----------------------
+# ASCII Art Display
+# -----------------------
+def display_intro():
+    intro = [
+        "\033[32m ▄▄▄▄ ▓██   ██▓ ▄▄▄      \033[0m",
+        "▓█████▄▒██  ██▒▒████▄    ",
+        "▒██▒ ▄██▒██ ██░▒██  ▀█▄  ",
+        "▒██░█▀  ░ ▐██▓░░██▄▄▄▄██ ",
+        "░▓█  ▀█▓░ ██▒▓░ ▓█   ▓██▒",
+        "░▒▓███▀▒ ██▒▒▒  ▒▒   ▓▒█░",
+        "▒░▒   ░▓██ ░▒░   ▒   ▒▒ ░",
+        " ░    ░▒ ▒ ░░    ░   ▒   ",
+        " ░     ░ ░           ░  ░",
+        "      ░░ ░               "
+    ]
+    for line in intro:
+        print(line)
+        time.sleep(0.1)
+    print("\nCryptoManager v1.0 - Secure File Encryption Tool")
+    print(f"System: {platform.system()} {platform.release()}\n")
+
+# -----------------------
+# Crypto Manager Class
+# -----------------------
 class CryptoManager:
     def __init__(self, password: bytes):
         self.password = password
@@ -34,7 +73,7 @@ class CryptoManager:
 
     def encrypt_file(self, filepath: str) -> bool:
         try:
-            print(f"[+] Şifreleniyor: {filepath}")
+            logger.info(f"Encrypting: {filepath}")
             with open(filepath, 'rb') as f:
                 data = f.read()
 
@@ -53,19 +92,20 @@ class CryptoManager:
             with open(encrypted_filepath, 'wb') as f:
                 f.write(salt + iv + encrypted_data)
             
-            os.remove(filepath)  # Orijinal dosyayı sil
+            os.remove(filepath)
+            logger.info(f"Successfully encrypted: {filepath} -> {encrypted_filepath}")
             return True
         except Exception as e:
-            print(f"[HATA] Şifreleme başarısız {filepath}: {e}")
+            logger.error(f"Encryption failed for {filepath}: {e}")
             return False
 
     def decrypt_file(self, filepath: str) -> bool:
         try:
             if not filepath.endswith(ENCRYPTED_EXTENSION):
-                print(f"[UYARI] Şifreli dosya değil: {filepath}")
+                logger.warning(f"Not an encrypted file: {filepath}")
                 return False
 
-            print(f"[+] Çözülüyor: {filepath}")
+            logger.info(f"Decrypting: {filepath}")
             with open(filepath, 'rb') as f:
                 file_data = f.read()
 
@@ -85,11 +125,26 @@ class CryptoManager:
             with open(original_filepath, 'wb') as f:
                 f.write(data)
             
-            os.remove(filepath)  # Şifreli dosyayı sil
+            os.remove(filepath)
+            logger.info(f"Successfully decrypted: {filepath} -> {original_filepath}")
             return True
         except Exception as e:
-            print(f"[HATA] Çözme başarısız {filepath}: {e}")
+            logger.error(f"Decryption failed for {filepath}: {e}")
             return False
+
+# -----------------------
+# Helper Functions
+# -----------------------
+def is_file_in_use(filepath: str) -> bool:
+    """Check if a file is currently in use by any process."""
+    for proc in psutil.process_iter(['pid', 'open_files']):
+        try:
+            for file in proc.info['open_files'] or []:
+                if file.path == filepath:
+                    return True
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return False
 
 def process_folder(folder: str, crypto: CryptoManager, action: str) -> int:
     success_count = 0
@@ -104,30 +159,50 @@ def process_folder(folder: str, crypto: CryptoManager, action: str) -> int:
                     success_count += 1
     return success_count
 
-def get_target_paths() -> list:
+def get_target_paths() -> List[str]:
     paths = []
+    logger.info("Collecting target paths from user input")
     while True:
-        path = input("Şifrelenecek/çözülecek dosya veya klasör yolunu girin (Çıkmak için 'q'): ").strip()
+        path = input("Enter file or folder path to process (or 'q' to quit): ").strip()
         if path.lower() == 'q':
             break
         if not os.path.exists(path):
-            print(f"[HATA] Yol bulunamadı: {path}")
+            logger.error(f"Path not found: {path}")
+            print(f"[ERROR] Path not found: {path}")
             continue
         paths.append(path)
     return paths
 
+def collect_decrypted_files(target_paths: List[str]) -> List[str]:
+    """Collect all decrypted files that need to be re-encrypted."""
+    decrypted_files = []
+    for path in target_paths:
+        if os.path.isfile(path) and not path.endswith(ENCRYPTED_EXTENSION):
+            decrypted_files.append(path)
+        elif os.path.isdir(path):
+            for root, _, files in os.walk(path):
+                for name in files:
+                    file_path = os.path.join(root, name)
+                    if not file_path.endswith(ENCRYPTED_EXTENSION):
+                        decrypted_files.append(file_path)
+    return decrypted_files
+
+# -----------------------
+# Main Application Logic
+# -----------------------
 def secure_access(password: bytes):
     crypto = CryptoManager(password)
-    
-    # Terminalden yolları al
     target_paths = get_target_paths()
+
     if not target_paths:
-        print("[HATA] Hiçbir geçerli yol girilmedi!")
+        logger.error("No valid paths provided. Exiting.")
+        print("[ERROR] No valid paths provided!")
         return
 
     try:
-        # Çözme işlemi
-        print("\n[+] Dosyalar çözülüyor...")
+        # Decryption phase
+        logger.info("Starting decryption process")
+        print("\n[+] Decrypting files...")
         total_decrypted = 0
         for path in target_paths:
             if os.path.isfile(path):
@@ -135,35 +210,73 @@ def secure_access(password: bytes):
             elif os.path.isdir(path):
                 total_decrypted += process_folder(path, crypto, 'decrypt')
 
-        print(f"[+] Çözülen dosya sayısı: {total_decrypted}")
+        print(f"[+] Decrypted {total_decrypted} files")
+        logger.info(f"Decrypted {total_decrypted} files")
         if total_decrypted == 0:
-            print("[UYARI] Çözülecek dosya bulunamadı!")
+            print("[WARNING] No files were decrypted!")
+            logger.warning("No files were decrypted")
+            return
 
-        # Zamanlayıcı
-        timeout = input(f"\nKaç saniye açık kalsın? (Varsayılan {DEFAULT_TIMEOUT} sn): ").strip()
-        timeout = int(timeout) if timeout.isdigit() else DEFAULT_TIMEOUT
-        print(f"\n[+] {timeout} saniye sonra şifreleme başlayacak...")
+        # Collect decrypted files for re-encryption
+        decrypted_files = collect_decrypted_files(target_paths)
+        if not decrypted_files:
+            print("[WARNING] No decrypted files found to re-encrypt!")
+            return
+
+        # Timeout phase
+        timeout_input = input(f"\nHow many seconds to keep files open? (Default {DEFAULT_TIMEOUT}s): ").strip()
+        timeout = int(timeout_input) if timeout_input.isdigit() else DEFAULT_TIMEOUT
+        print(f"\n[+] Encrypting in {timeout} seconds...")
+        logger.info(f"Waiting {timeout} seconds before re-encryption")
         time.sleep(timeout)
 
-        # Tekrar şifreleme
-        print("\n[+] Süre doldu. Şifreleme başlatılıyor...")
-        total_encrypted = 0
-        for path in target_paths:
-            if not os.path.exists(path):
-                continue
-            if os.path.isfile(path):
-                total_encrypted += 1 if crypto.encrypt_file(path) else 0
-            elif os.path.isdir(path):
-                total_encrypted += process_folder(path, crypto, 'encrypt')
+        # Re-encryption phase with file usage check
+        logger.info("Starting re-encryption process")
+        print("\n[+] Time's up. Checking file usage before encrypting...")
+        files_to_encrypt = decrypted_files[:]
+        while files_to_encrypt:
+            still_in_use = []
+            for filepath in files_to_encrypt:
+                if os.path.exists(filepath) and is_file_in_use(filepath):
+                    logger.warning(f"File in use: {filepath}")
+                    print(f"[WARNING] File still in use: {filepath}")
+                    still_in_use.append(filepath)
+                elif os.path.exists(filepath):
+                    if crypto.encrypt_file(filepath):
+                        logger.info(f"Re-encrypted: {filepath}")
+                        print(f"[+] Re-encrypted: {filepath}")
+                    else:
+                        logger.error(f"Failed to re-encrypt: {filepath}")
+                        print(f"[ERROR] Failed to re-encrypt: {filepath}")
 
-        print(f"[+] Şifrelenen dosya sayısı: {total_encrypted}")
-        
+            if still_in_use:
+                files_to_encrypt = still_in_use
+                print(f"[INFO] Waiting {CHECK_INTERVAL} seconds for files to be released...")
+                logger.info(f"Waiting {CHECK_INTERVAL} seconds for {len(still_in_use)} files in use")
+                time.sleep(CHECK_INTERVAL)
+            else:
+                break
+
+        print(f"[+] Re-encryption completed. All files are now secure.")
+        logger.info("Re-encryption completed successfully")
+
     except KeyboardInterrupt:
-        print("\n[UYARI] Kullanıcı tarafından durduruldu!")
+        logger.warning("Process interrupted by user")
+        print("\n[WARNING] Process interrupted by user!")
     except Exception as e:
-        print(f"[HATA] Genel hata: {e}")
+        logger.error(f"Unexpected error: {e}")
+        print(f"[ERROR] An unexpected error occurred: {e}")
 
+# -----------------------
+# Entry Point
+# -----------------------
 if __name__ == "__main__":
-    print(f"\n[***] Sistem: {platform.system()} {platform.release()}")
-    password = getpass.getpass("Şifre belirle (unutma!): ").encode()
+    display_intro()
+    try:
+        import psutil  # Ensure psutil is installed
+    except ImportError:
+        print("[ERROR] 'psutil' module is required. Install it with 'pip install psutil'")
+        sys.exit(1)
+    password = getpass.getpass("Enter encryption password (remember it!): ").encode()
     secure_access(password)
+    print("\n[+] Process completed. Check crypto_manager.log for details.")
